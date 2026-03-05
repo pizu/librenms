@@ -1,7 +1,9 @@
 # Scriptexec Transport
 
 The Scriptexec transport allows LibreNMS to execute a custom script when an alert is triggered.
+
 This provides a flexible method for handling alerts externally without modifying LibreNMS itself.
+
 The alert payload is sent to the script as **JSON via STDIN**, allowing the script to process the alert information as required.
 
 ## Overview

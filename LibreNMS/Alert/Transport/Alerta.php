@@ -435,7 +435,7 @@ class Alerta extends Transport
             ]);
 
             return $this->cleanMultilineText((string) $body);
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return '';
         }
     }

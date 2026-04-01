@@ -161,6 +161,7 @@ class Alerta extends Transport
     ): void {
         $text = $this->buildAlertText($alertData, $fault);
         $event = $this->buildEventName($alertData, $faultSignature);
+        $alertaDebug = !empty($this->config['alerta-debug']);
 
         $payload = [
             'resource' => $resource,
@@ -190,21 +191,17 @@ class Alerta extends Transport
                 'state' => $alertData['state'] ?? null,
                 'timestamp' => $alertData['timestamp'] ?? null,
                 'fault_signature' => $faultSignature,
-
-                // Optional debug field. Enable temporarily when validating
-                // per-fault uniqueness, template rendering, or recovery matching.
-                // 'fault' => $fault,
             ],
-
-            // Optional debug field. Enable temporarily to include the full
-            // LibreNMS alert payload in Alerta during troubleshooting.
-            // 'rawData' => json_encode(
-            //     $alertData,
-            //     JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-            // ),
-
             'origin' => $resource,
         ];
+
+        if ($alertaDebug) {
+            $payload['attributes']['fault'] = $fault;
+            $payload['rawData'] = json_encode(
+                $alertData,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            );
+        }
 
         $res = Http::client()
             ->acceptJson()
@@ -514,6 +511,13 @@ class Alerta extends Transport
                     'name' => 'recoverstate',
                     'descr' => 'Severity to send to Alerta when the alert recovers.',
                     'type' => 'text',
+                ],
+                [
+                    'title' => 'Alerta Debug',
+                    'name' => 'alerta-debug',
+                    'descr' => 'Enable optional debug fields in the payload sent to Alerta. This debug is on the Alerta side (DATA tab) and should normally stay disabled.',
+                    'type' => 'checkbox',
+                    'default' => false,
                 ],
             ],
             'validation' => [

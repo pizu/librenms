@@ -13,7 +13,7 @@
  */
 
 /**
- * Alerta Transport
+ * Alerta API Transport
  *
  * Custom LibreNMS -> Alerta transport with generic per-fault handling.
  *
@@ -82,12 +82,12 @@ class Alerta extends Transport
         $state = $alert_data['state'] ?? null;
         $isRecovered = ($state == AlertState::RECOVERED);
 
-        $currentFaults = $this->extractFaults($alert_data, !$isRecovered);
+        $currentFaults = $this->extractFaults($alert_data, ! $isRecovered);
         $currentIndexedFaults = $this->indexFaultsBySignature($alert_data, $currentFaults);
 
         $faultsToClear = [];
         foreach ($previousIndexedFaults as $signature => $fault) {
-            if (!array_key_exists($signature, $currentIndexedFaults)) {
+            if (! array_key_exists($signature, $currentIndexedFaults)) {
                 $faultsToClear[$signature] = $fault;
             }
         }
@@ -230,7 +230,7 @@ class Alerta extends Transport
     {
         $faults = $alertData['faults'] ?? null;
 
-        if (!is_array($faults) || empty($faults)) {
+        if (! is_array($faults) || empty($faults)) {
             return $includeEmptyFallback ? [[]] : [];
         }
 
@@ -314,14 +314,14 @@ class Alerta extends Transport
      */
     private function buildFaultSignature(array $alertData, array $fault): string
     {
-        if (!empty($fault)) {
+        if (! empty($fault)) {
             $normalizedFault = $this->normalizeForSignature($fault, self::FAULT_SIGNATURE_IGNORE);
 
-            if (empty($normalizedFault) && !empty($fault['string'])) {
+            if (empty($normalizedFault) && ! empty($fault['string'])) {
                 $normalizedFault = ['string' => $this->cleanString((string) $fault['string'])];
             }
 
-            if (!empty($normalizedFault)) {
+            if (! empty($normalizedFault)) {
                 return md5(json_encode($normalizedFault, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             }
         }
@@ -374,11 +374,11 @@ class Alerta extends Transport
             return $rendered;
         }
 
-        if (!empty($fault['string'])) {
+        if (! empty($fault['string'])) {
             return $this->cleanString((string) $fault['string']);
         }
 
-        if (!empty($fault)) {
+        if (! empty($fault)) {
             $parts = [];
 
             foreach ($fault as $key => $value) {
@@ -393,21 +393,21 @@ class Alerta extends Transport
                 $parts[] = $key . ': ' . $this->cleanString((string) $value);
             }
 
-            if (!empty($parts)) {
+            if (! empty($parts)) {
                 return implode(' | ', $parts);
             }
         }
 
         $parts = [];
         foreach (['title', 'msg', 'name'] as $field) {
-            if (!empty($alertData[$field])) {
+            if (! empty($alertData[$field])) {
                 $parts[] = $this->cleanString((string) $alertData[$field]);
             }
         }
 
         $parts = array_values(array_unique(array_filter($parts)));
 
-        return !empty($parts) ? implode(' | ', $parts) : 'LibreNMS alert';
+        return ! empty($parts) ? implode(' | ', $parts) : 'LibreNMS alert';
     }
 
     /**
@@ -419,12 +419,12 @@ class Alerta extends Transport
             $templateEngine = new LibreNmsTemplate();
             $templateModel = $templateEngine->getTemplate($alertData);
 
-            if (!$templateModel) {
+            if (! $templateModel) {
                 return '';
             }
 
             $renderAlert = $alertData;
-            $renderAlert['faults'] = !empty($fault) ? [$fault] : [];
+            $renderAlert['faults'] = ! empty($fault) ? [$fault] : [];
 
             $body = $templateEngine->getBody([
                 'alert' => $renderAlert,

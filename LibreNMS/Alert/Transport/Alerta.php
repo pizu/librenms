@@ -161,7 +161,7 @@ class Alerta extends Transport
     ): void {
         $text = $this->buildAlertText($alertData, $fault);
         $event = $this->buildEventName($alertData, $faultSignature);
-        $alertaDebug = !empty($this->config['alerta-debug']);
+        $alertaDebug = ! empty($this->config['alerta-debug']);
 
         $payload = [
             'resource' => $resource,

@@ -2,7 +2,7 @@
 
 /*Copyright (c) 2019 GitStoph <https://github.com/GitStoph>
  * Original Alerta transport author: GitStoph
- * Updated/customised for LibreNMS -> Alerta integration: 2026-03-30
+ * Updated/customised for LibreNMS -> Alerta integration: 2026-04-01
  * Updated by: Pizu (DM)
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -13,7 +13,7 @@
  */
 
 /**
- * Alerta API Transport
+ * Alerta Transport
  *
  * Custom LibreNMS -> Alerta transport with generic per-fault handling.
  *
@@ -64,6 +64,40 @@ class Alerta extends Transport
     ];
 
     /**
+     * Generic IDs that describe the alert/device context, not the actual
+     * monitored fault object. These must not be selected as per-fault
+     * identity fields.
+     */
+    private const FAULT_SIGNATURE_SKIP_ID_KEYS = [
+        'id',
+        'uid',
+        'device_id',
+        'rule_id',
+        'alert_id',
+        'location_id',
+        'poller_group',
+        'vrf_id',
+    ];
+
+    /**
+     * Stable scalar fields used only when a LibreNMS fault row does not expose
+     * a useful object *_id field. This keeps the transport generic while still
+     * avoiding volatile counters/timestamps/status history in signatures.
+     */
+    private const FAULT_SIGNATURE_STABLE_FALLBACK_KEYS = [
+        'ifIndex',
+        'ifName',
+        'ifDescr',
+        'sensor_index',
+        'sensor_descr',
+        'service_ip',
+        'service_type',
+        'service_desc',
+        'name',
+        'descr',
+    ];
+
+    /**
      * Deliver a LibreNMS alert to Alerta.
      *
      * Clears any missing fault signatures first, then sends the current active
@@ -82,12 +116,12 @@ class Alerta extends Transport
         $state = $alert_data['state'] ?? null;
         $isRecovered = ($state == AlertState::RECOVERED);
 
-        $currentFaults = $this->extractFaults($alert_data, ! $isRecovered);
+        $currentFaults = $this->extractFaults($alert_data, !$isRecovered);
         $currentIndexedFaults = $this->indexFaultsBySignature($alert_data, $currentFaults);
 
         $faultsToClear = [];
         foreach ($previousIndexedFaults as $signature => $fault) {
-            if (! array_key_exists($signature, $currentIndexedFaults)) {
+            if (!array_key_exists($signature, $currentIndexedFaults)) {
                 $faultsToClear[$signature] = $fault;
             }
         }
@@ -161,7 +195,7 @@ class Alerta extends Transport
     ): void {
         $text = $this->buildAlertText($alertData, $fault);
         $event = $this->buildEventName($alertData, $faultSignature);
-        $alertaDebug = ! empty($this->config['alerta-debug']);
+        $alertaDebug = !empty($this->config['alerta-debug']);
 
         $payload = [
             'resource' => $resource,
@@ -172,7 +206,7 @@ class Alerta extends Transport
             'group' => $group,
             'value' => (string) ($alertData['state'] ?? ''),
             'text' => $text,
-            'attributes' => [
+            'attributes' => array_merge([
                 'alert_id' => $alertData['alert_id'] ?? null,
                 'alert_uid' => $alertData['uid'] ?? ($alertData['id'] ?? null),
                 'deviceName' => $alertData['sysName'] ?? ($alertData['hostname'] ?? null),
@@ -191,7 +225,7 @@ class Alerta extends Transport
                 'state' => $alertData['state'] ?? null,
                 'timestamp' => $alertData['timestamp'] ?? null,
                 'fault_signature' => $faultSignature,
-            ],
+            ], $this->buildFaultSignatureAttributes($fault)),
             'origin' => $resource,
         ];
 
@@ -230,7 +264,7 @@ class Alerta extends Transport
     {
         $faults = $alertData['faults'] ?? null;
 
-        if (! is_array($faults) || empty($faults)) {
+        if (!is_array($faults) || empty($faults)) {
             return $includeEmptyFallback ? [[]] : [];
         }
 
@@ -311,29 +345,145 @@ class Alerta extends Transport
 
     /**
      * Build a compact signature for one fault.
+     *
+     * The normal path uses only a stable fault object identity instead of the
+     * full fault row. This prevents changing counters, poll timestamps, status
+     * history, and current values from creating a new Alerta event signature for
+     * the same still-active LibreNMS fault.
      */
     private function buildFaultSignature(array $alertData, array $fault): string
     {
-        if (! empty($fault)) {
+        $signatureData = $this->buildFaultSignatureData($alertData, $fault);
+
+        return md5(json_encode($signatureData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * Build deterministic data used to generate the per-fault signature.
+     */
+    private function buildFaultSignatureData(array $alertData, array $fault): array
+    {
+        $identity = !empty($fault) ? $this->findStableFaultIdentity($fault) : null;
+
+        if ($identity !== null) {
+            return [
+                'scope' => 'fault_object',
+                'device_id' => (string) ($alertData['device_id'] ?? ($fault['device_id'] ?? '')),
+                'rule_id' => (string) ($alertData['rule_id'] ?? ($fault['rule_id'] ?? '')),
+                'fault_key' => $identity['key'],
+                'fault_value' => $identity['value'],
+            ];
+        }
+
+        if (!empty($fault)) {
             $normalizedFault = $this->normalizeForSignature($fault, self::FAULT_SIGNATURE_IGNORE);
 
-            if (empty($normalizedFault) && ! empty($fault['string'])) {
+            if (empty($normalizedFault) && !empty($fault['string'])) {
                 $normalizedFault = ['string' => $this->cleanString((string) $fault['string'])];
             }
 
-            if (! empty($normalizedFault)) {
-                return md5(json_encode($normalizedFault, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            if (!empty($normalizedFault)) {
+                return [
+                    'scope' => 'normalized_fault_fallback',
+                    'device_id' => (string) ($alertData['device_id'] ?? ($fault['device_id'] ?? '')),
+                    'rule_id' => (string) ($alertData['rule_id'] ?? ($fault['rule_id'] ?? '')),
+                    'fault' => $normalizedFault,
+                ];
             }
         }
 
-        $generic = [
+        return [
+            'scope' => 'alert_fallback',
             'device_id' => (string) ($alertData['device_id'] ?? ''),
             'rule_id' => (string) ($alertData['rule_id'] ?? ''),
             'name' => $this->cleanString((string) ($alertData['name'] ?? '')),
             'type' => $this->cleanString((string) ($alertData['type'] ?? '')),
         ];
+    }
 
-        return md5(json_encode($generic, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    /**
+     * Add non-sensitive signature metadata to Alerta attributes for visibility.
+     */
+    private function buildFaultSignatureAttributes(array $fault): array
+    {
+        $identity = !empty($fault) ? $this->findStableFaultIdentity($fault) : null;
+
+        if ($identity !== null) {
+            return [
+                'fault_signature_source' => $identity['source'],
+                'fault_identity_key' => $identity['key'],
+                'fault_identity_value' => $identity['value'],
+            ];
+        }
+
+        return [
+            'fault_signature_source' => !empty($fault) ? 'normalized_fault_fallback' : 'alert_fallback',
+            'fault_identity_key' => null,
+            'fault_identity_value' => null,
+        ];
+    }
+
+    /**
+     * Find the best stable monitored-object identity in a LibreNMS fault row.
+     *
+     * This is intentionally generic: the transport does not check alert type.
+     * It first prefers useful object *_id fields, then falls back to known stable
+     * index/name fields if no object ID is present.
+     */
+    private function findStableFaultIdentity(array $fault): ?array
+    {
+        foreach ($fault as $key => $value) {
+            $key = (string) $key;
+
+            if (!$this->isUsableSignatureScalar($value)) {
+                continue;
+            }
+
+            if (!preg_match('/_id$/i', $key)) {
+                continue;
+            }
+
+            if (in_array($key, self::FAULT_SIGNATURE_SKIP_ID_KEYS, true)) {
+                continue;
+            }
+
+            return [
+                'key' => $key,
+                'value' => $this->cleanString((string) $value),
+                'source' => 'object_id',
+            ];
+        }
+
+        foreach (self::FAULT_SIGNATURE_STABLE_FALLBACK_KEYS as $key) {
+            if (!array_key_exists($key, $fault)) {
+                continue;
+            }
+
+            $value = $fault[$key];
+            if (!$this->isUsableSignatureScalar($value)) {
+                continue;
+            }
+
+            return [
+                'key' => $key,
+                'value' => $this->cleanString((string) $value),
+                'source' => 'stable_field',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Determine if a fault value can be safely used in an identity signature.
+     */
+    private function isUsableSignatureScalar($value): bool
+    {
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        return trim((string) $value) !== '';
     }
 
     /**
@@ -374,11 +524,11 @@ class Alerta extends Transport
             return $rendered;
         }
 
-        if (! empty($fault['string'])) {
+        if (!empty($fault['string'])) {
             return $this->cleanString((string) $fault['string']);
         }
 
-        if (! empty($fault)) {
+        if (!empty($fault)) {
             $parts = [];
 
             foreach ($fault as $key => $value) {
@@ -393,21 +543,21 @@ class Alerta extends Transport
                 $parts[] = $key . ': ' . $this->cleanString((string) $value);
             }
 
-            if (! empty($parts)) {
+            if (!empty($parts)) {
                 return implode(' | ', $parts);
             }
         }
 
         $parts = [];
         foreach (['title', 'msg', 'name'] as $field) {
-            if (! empty($alertData[$field])) {
+            if (!empty($alertData[$field])) {
                 $parts[] = $this->cleanString((string) $alertData[$field]);
             }
         }
 
         $parts = array_values(array_unique(array_filter($parts)));
 
-        return ! empty($parts) ? implode(' | ', $parts) : 'LibreNMS alert';
+        return !empty($parts) ? implode(' | ', $parts) : 'LibreNMS alert';
     }
 
     /**
@@ -419,12 +569,12 @@ class Alerta extends Transport
             $templateEngine = new LibreNmsTemplate();
             $templateModel = $templateEngine->getTemplate($alertData);
 
-            if (! $templateModel) {
+            if (!$templateModel) {
                 return '';
             }
 
             $renderAlert = $alertData;
-            $renderAlert['faults'] = ! empty($fault) ? [$fault] : [];
+            $renderAlert['faults'] = !empty($fault) ? [$fault] : [];
 
             $body = $templateEngine->getBody([
                 'alert' => $renderAlert,
@@ -515,7 +665,7 @@ class Alerta extends Transport
                 [
                     'title' => 'Alerta Debug',
                     'name' => 'alerta-debug',
-                    'descr' => 'Enable optional debug fields in the payload sent to Alerta. This debug is on the Alerta side (DATA tab) and should normally stay disabled.',
+                    'descr' => 'Enable optional debug fields in the payload sent to Alerta. This debug is on the Alerta side and should normally stay disabled.',
                     'type' => 'checkbox',
                     'default' => false,
                 ],

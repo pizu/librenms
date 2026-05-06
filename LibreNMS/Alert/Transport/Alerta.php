@@ -20,15 +20,19 @@
  * Summary:
  * - Sends one Alerta event per LibreNMS fault row
  * - Keeps resource mapped to configured origin
- * - Keeps group mapped to top-level sysContact
+ * - Keeps group mapped to the original LibreNMS alert name by default
+ * - Optionally allows group to be mapped to top-level sysContact
  * - Re-renders the LibreNMS alert template per fault for text/description
  * - Uses a stable per-fault event signature for repeats and recovery matching
  *
  * Notes:
  * - The MD5 hash is used only as a compact fault fingerprint for uniqueness
  *   and recovery matching; it is not used for security
+ * - Changing "Group by sysContact" only affects newly-created Alerta alerts.
+ *   Existing or re-opened Alerta alerts may keep their previous group because
+ *   Alerta de-duplicates/re-opens alerts using the alert identity, not the group field
  * - Optional debug fields such as 'fault' and 'rawData' can be enabled
- *   temporarily for troubleshooting
+ *   through the "Alerta Debug" transport option for troubleshooting
  */
 
 namespace LibreNMS\Alert\Transport;
@@ -107,7 +111,15 @@ class Alerta extends Transport
     {
         $resource = $this->cleanString($this->config['origin'] ?? 'LibreNMS') ?: 'LibreNMS';
         $environment = $this->cleanString($this->config['environment'] ?? '');
-        $group = $this->cleanString($alert_data['sysContact'] ?? 'Unknown') ?: 'Unknown';
+        // Preserve the original LibreNMS Alerta behaviour by default:
+        // group = alert/rule name. sysContact grouping is optional because
+        // not every device has sysContact populated.
+        $defaultGroup = $this->cleanString($alert_data['name'] ?? 'LibreNMS') ?: 'LibreNMS';
+        $group = $defaultGroup;
+
+        if (! empty($this->config['group-by-syscontact'])) {
+            $group = $this->cleanString($alert_data['sysContact'] ?? '') ?: $defaultGroup;
+        }
         $service = [$this->cleanString($alert_data['type'] ?? 'LibreNMS') ?: 'LibreNMS'];
 
         $cacheKey = $this->buildCacheKey($alert_data);
@@ -224,6 +236,7 @@ class Alerta extends Transport
                 'uptime' => $alertData['uptime_long'] ?? ($alertData['uptime'] ?? null),
                 'state' => $alertData['state'] ?? null,
                 'timestamp' => $alertData['timestamp'] ?? null,
+                'proc' => $alertData['proc'] ?? null,
                 'fault_signature' => $faultSignature,
             ], $this->buildFaultSignatureAttributes($fault)),
             'origin' => $resource,
@@ -661,6 +674,13 @@ class Alerta extends Transport
                     'name' => 'recoverstate',
                     'descr' => 'Severity to send to Alerta when the alert recovers.',
                     'type' => 'text',
+                ],
+                [
+                    'title' => 'Group by sysContact',
+                    'name' => 'group-by-syscontact',
+                    'descr' => 'Use the device sysContact as the Alerta group. Disabled keeps the original LibreNMS behaviour: group is the alert rule name. Note: changing this option affects newly-created Alerta alerts; existing or re-opened alerts may keep their previous group due to Alerta de-duplication.',
+                    'type' => 'checkbox',
+                    'default' => false,
                 ],
                 [
                     'title' => 'Alerta Debug',

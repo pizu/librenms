@@ -32,7 +32,7 @@
         "gridstack": "^12.6.0",
         "luxon": "^3.7.2",
         "v-tooltip": "^2.0.3",
-        "vue": "^3.0.0",
+        "vue": "^3.0.1",
         "vue-i18n": "^8.26.8",
         "vue-js-modal": "^2.0.1",
         "vue-js-toggle-button": "^1.3.3",
